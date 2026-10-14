@@ -1,0 +1,1 @@
+{"name":"private-node-deploy-bootstrap","private":true,"version":"0.0.0","engines":{"node":">=24.11.0 <25"},"scripts":{"build":"node private-source.cjs build","start":"node private-source.cjs start"}}
