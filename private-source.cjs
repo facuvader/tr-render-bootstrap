@@ -23,7 +23,7 @@ function run(binary,args,options={}){const reply=spawnSync(binary,args,{encoding
 function regularTree(directory){assert.ok(fs.lstatSync(directory).isDirectory()&&!fs.lstatSync(directory).isSymbolicLink());return fs.readdirSync(directory,{withFileTypes:true}).flatMap(entry=>{
   if(entry.name==='.git')return [];assert.ok(!entry.isSymbolicLink());const file=path.join(directory,entry.name);return entry.isDirectory()?regularTree(file):[file];});}
 function removeOwnedTemp(directory){const absolute=path.resolve(directory),parent=path.resolve(os.tmpdir());assert.equal(path.dirname(absolute),parent);assert.ok(path.basename(absolute).startsWith('tr-render-source-'));assert.ok(!fs.lstatSync(absolute).isSymbolicLink());fs.rmSync(absolute,{recursive:true});}
-function build({env=process.env,install=true,protectTemp}={}){const config=configuration(env),key=privateKey(env);assert.ok(!fs.existsSync(TARGET),'A clean deployment checkout is required; never erase an unknown directory.');
+function build({env=process.env,install=true,protectTemp}={}){const config=configuration(env),key=privateKey(env),cached=fs.existsSync(TARGET);if(cached)validateStart(env);
   assert.ok(process.platform!=='win32'||typeof protectTemp==='function','Windows test builds need a verified NTFS privacy callback before any key is written.');
   const temp=fs.mkdtempSync(path.join(os.tmpdir(),'tr-render-source-')),keyFile=path.join(temp,'key'),known=path.join(temp,'known_hosts'),sshConfig=path.join(temp,'ssh_config'),gitConfig=path.join(temp,'git_config'),source=path.join(temp,'source');
   try{if(process.platform==='win32')assert.equal(protectTemp(temp),true);fs.writeFileSync(keyFile,key,{mode:0o600,flag:'wx'});fs.writeFileSync(known,publicHostKey(),{mode:0o600,flag:'wx'});
@@ -37,11 +37,14 @@ function build({env=process.env,install=true,protectTemp}={}){const config=confi
     for(const file of files){const name=path.relative(source,file).replaceAll('\\','/');assert.ok(!name.startsWith('.')||name==='.gitignore');assert.match(name,/^[a-zA-Z0-9_.\/-]+$/);assert.ok(!name.includes('..')&&!name.endsWith('.apk')&&!name.endsWith('.aab'));
       const content=fs.readFileSync(file);assert.ok(!/-----BEGIN (?:OPENSSH|RSA|EC)? ?PRIVATE KEY-----\r?\n|"private_key"\s*:\s*"/.test(content.toString('utf8')));hashes[name]=hash(content);}
     assert.ok(hashes['server.cjs']&&hashes['package.json']);const pkg=JSON.parse(fs.readFileSync(path.join(source,'package.json'),'utf8'));assert.equal(pkg.private,true);
+    // Replace only our verified, identical-revision disposable build cache, and
+    // only after the new source fetch has succeeded. Unknown/tampered caches stay intact.
+    if(cached){validateStart(env);assert.equal(path.dirname(path.resolve(TARGET)),path.resolve(ROOT));assert.equal(path.basename(TARGET),'app-source');assert.ok(!fs.lstatSync(TARGET).isSymbolicLink());fs.rmSync(TARGET,{recursive:true});}
     fs.mkdirSync(TARGET);for(const file of files){const name=path.relative(source,file),dest=path.join(TARGET,name);fs.mkdirSync(path.dirname(dest),{recursive:true});fs.copyFileSync(file,dest);}
     fs.writeFileSync(path.join(TARGET,MARKER),JSON.stringify({schema:1,repository:config.repository,commit:config.commit,hashes})+'\n',{flag:'wx'});
     if(install){const options={cwd:TARGET,env:cleanEnvironment(env)};if(process.platform==='win32')run(process.env.ComSpec||'cmd.exe',['/d','/s','/c','npm install --omit=dev --ignore-scripts --no-audit --no-fund'],options);
       else run('npm',['install','--omit=dev','--ignore-scripts','--no-audit','--no-fund'],options);}
-    return {sourceFiles:files.length,commit:config.commit,hostKeyPinned:true,privateKeyCopiedIntoArtifact:false};
+    return {sourceFiles:files.length,commit:config.commit,hostKeyPinned:true,privateKeyCopiedIntoArtifact:false,verifiedCacheRebuilt:cached};
   }finally{removeOwnedTemp(temp);}
 }
 function validateStart(env=process.env){const expected=configuration(env);assert.ok(fs.lstatSync(TARGET).isDirectory()&&!fs.lstatSync(TARGET).isSymbolicLink());const marker=path.join(TARGET,MARKER);assert.ok(fs.lstatSync(marker).isFile()&&!fs.lstatSync(marker).isSymbolicLink());
@@ -53,6 +56,6 @@ function start(){const file=validateStart(),env={...process.env};for(const key o
   const child=spawn(process.execPath,[file],{cwd:TARGET,env,stdio:'inherit'});child.once('error',()=>{console.error('El servidor privado no pudo iniciarse.');process.exitCode=1;});
   for(const signal of ['SIGTERM','SIGINT'])process.once(signal,()=>child.kill(signal));child.once('exit',code=>{process.exitCode=code===0?0:1;});
 }
-if(require.main===module){try{if(process.argv[2]==='build'){const result=build();console.log(JSON.stringify({build:'private-source-ready',sourceFiles:result.sourceFiles,privateCredentialsLogged:false}));}
-  else if(process.argv[2]==='start')start();else throw Error('Unknown mode');}catch{console.error('No se pudo preparar el servidor privado. Revisá el commit y los secretos de ensayo; no se mostraron credenciales.');process.exitCode=1;}}
+if(require.main===module){try{if(process.argv[2]==='build'){const result=build();console.log(JSON.stringify({build:'private-source-ready',sourceFiles:result.sourceFiles,verifiedCacheRebuilt:result.verifiedCacheRebuilt,privateCredentialsLogged:false}));}
+  else if(process.argv[2]==='start')start();else throw Error('Unknown mode');}catch(e){console.error(JSON.stringify({build:'stopped',operation:e.operation,exitStatus:e.exitStatus,category:e.category,failureType:e.name,secretValuesLogged:false}));process.exitCode=1;}}
 module.exports={configuration,privateKey,publicHostKey,cleanEnvironment,build,validateStart};
